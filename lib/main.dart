@@ -34,6 +34,15 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
         Waypoint(name: 'Metropolitan Museum', info: 'Explore the city museum.', audioUrl: '', lat: 40.779437, lon: -73.963244),
       ],
     ),
+    // Manchester City Centre demo tour
+    Tour(
+      name: 'Manchester City Centre',
+      waypoints: [
+        Waypoint(name: 'Piccadilly Gardens', info: 'Start at Piccadilly Gardens', audioUrl: '', lat: 53.4808, lon: -2.2360),
+        Waypoint(name: 'Emmeline Pankhurst Statue', info: 'St Peter\'s Square memorial', audioUrl: '', lat: 53.4798, lon: -2.2426),
+        Waypoint(name: 'Sinclair\'s Oyster Bar', info: 'Historic oyster bar near the markets', audioUrl: '', lat: 53.4809, lon: -2.2380),
+      ],
+    ),
     Tour(
       name: 'Historic Walk',
       waypoints: [

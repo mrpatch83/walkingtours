@@ -3,6 +3,8 @@ import 'dart:math' as math;
 // Platform import removed after removing external navigation
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as ll;
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 
 
@@ -30,7 +32,7 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
   final List<Tour> tours = [
     Tour(
       name: 'Manchester City Centre',
-      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/Manchester_City_Centre_-_Panorama.jpg',
+      imageUrl: 'assets/images/manchester.svg',
       waypoints: [
         Waypoint(name: 'Piccadilly Gardens', info: 'Start at Piccadilly Gardens', audioUrl: '', lat: 53.4808, lon: -2.2360),
         Waypoint(name: 'Emmeline Pankhurst Statue', info: 'Emmeline Pankhurst memorial in St Peter\'s Square', audioUrl: '', lat: 53.4798, lon: -2.2426),
@@ -54,7 +56,11 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
               // Background image (if provided) or placeholder gradient
               Positioned.fill(
                 child: (tour.imageUrl != null && tour.imageUrl!.isNotEmpty)
-                    ? Image.network(tour.imageUrl!, fit: BoxFit.cover)
+                    ? (tour.imageUrl!.startsWith('assets/') && tour.imageUrl!.endsWith('.svg')
+                        ? SvgPicture.asset(tour.imageUrl!, fit: BoxFit.cover)
+                        : (tour.imageUrl!.startsWith('assets/')
+                            ? Image.asset(tour.imageUrl!, fit: BoxFit.cover)
+                            : Image.network(tour.imageUrl!, fit: BoxFit.cover)))
                     : Container(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
@@ -167,7 +173,7 @@ class WaypointListScreen extends StatelessWidget {
                 Text(waypoint.info),
                 SizedBox(height: 6),
                 ValueListenableBuilder<Offset>(
-                  valueListenable: LocationSimulator.instance.position,
+                  valueListenable: LocationService.instance.position,
                   builder: (context, pos, _) {
                     if (pos == Offset.zero) return Text('Location: unknown', style: TextStyle(fontSize: 12));
                     final meters = distanceMeters(pos.dx, pos.dy, waypoint.lat, waypoint.lon);
@@ -188,7 +194,7 @@ class WaypointListScreen extends StatelessWidget {
               icon: Icon(Icons.my_location),
               onPressed: () {
                 // simulate user's device moving to this waypoint
-                LocationSimulator.instance.setPosition(waypoint.lat, waypoint.lon);
+                LocationService.instance.setPosition(waypoint.lat, waypoint.lon);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Simulated location set to ${waypoint.name}')));
               },
             ),
@@ -222,7 +228,7 @@ class WaypointDetailScreen extends StatelessWidget {
             ),
             SizedBox(height: 12),
             ValueListenableBuilder<Offset>(
-              valueListenable: LocationSimulator.instance.position,
+              valueListenable: LocationService.instance.position,
               builder: (context, pos, _) {
                 if (pos == Offset.zero) return Text('Current location unknown');
                 final meters = distanceMeters(pos.dx, pos.dy, waypoint.lat, waypoint.lon);
@@ -232,7 +238,7 @@ class WaypointDetailScreen extends StatelessWidget {
             SizedBox(height: 12),
             ElevatedButton(
               onPressed: () {
-                LocationSimulator.instance.setPosition(waypoint.lat, waypoint.lon);
+                LocationService.instance.setPosition(waypoint.lat, waypoint.lon);
               },
               child: Text('Simulate device at this waypoint'),
             ),
@@ -244,8 +250,8 @@ class WaypointDetailScreen extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => MapNavigationScreen(
-                    startLat: LocationSimulator.instance.position.value == Offset.zero ? waypoint.lat : LocationSimulator.instance.position.value.dx,
-                    startLon: LocationSimulator.instance.position.value == Offset.zero ? waypoint.lon : LocationSimulator.instance.position.value.dy,
+                    startLat: LocationService.instance.position.value == Offset.zero ? waypoint.lat : LocationService.instance.position.value.dx,
+                    startLon: LocationService.instance.position.value == Offset.zero ? waypoint.lon : LocationService.instance.position.value.dy,
                     destLat: waypoint.lat,
                     destLon: waypoint.lon,
                   )),
@@ -276,13 +282,49 @@ class Waypoint {
   Waypoint({required this.name, required this.info, required this.audioUrl, required this.lat, required this.lon});
 }
 
-// Simple simulated location provider for demo purposes
-class LocationSimulator {
-  LocationSimulator._();
-  static final instance = LocationSimulator._();
+// Location service: uses device GPS when permission granted, otherwise supports manual simulation
+class LocationService {
+  LocationService._();
+  static final instance = LocationService._();
   // dx = lat, dy = lon
   final ValueNotifier<Offset> position = ValueNotifier(Offset.zero);
-  void setPosition(double lat, double lon) => position.value = Offset(lat, lon);
+  StreamSubscription<Position>? _sub;
+  bool _usingDevice = false;
+
+  Future<void> start() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        _usingDevice = false;
+        return;
+      }
+      _usingDevice = true;
+      final locationSettings = LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 5);
+      _sub = Geolocator.getPositionStream(locationSettings: locationSettings)
+          .listen((pos) {
+        if (_usingDevice) {
+          position.value = Offset(pos.latitude, pos.longitude);
+        }
+      });
+    } catch (e) {
+      _usingDevice = false;
+    }
+  }
+
+  void stop() {
+    _sub?.cancel();
+    _sub = null;
+    _usingDevice = false;
+  }
+
+  void setPosition(double lat, double lon) {
+    // manual simulation overrides device updates until device tracking starts again
+    _usingDevice = false;
+    position.value = Offset(lat, lon);
+  }
 }
 
 double degreesToRadians(double degrees) => degrees * (3.141592653589793 / 180.0);
@@ -317,6 +359,8 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
   void initState() {
     super.initState();
     _computeStraightRoute();
+    // start device location updates (will request permission if needed)
+    LocationService.instance.start();
   }
 
   void _computeStraightRoute() {
@@ -348,7 +392,7 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
         return;
       }
       final p = _route[_stepIndex];
-      LocationSimulator.instance.setPosition(p.latitude, p.longitude);
+      LocationService.instance.setPosition(p.latitude, p.longitude);
       try {
         _mapController.move(p, _mapController.zoom);
       } catch (_) {}

@@ -26,42 +26,15 @@ class TikTokFeedScreen extends StatefulWidget {
 }
 
 class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
+  // Single Manchester tour with multiple waypoints starting at Piccadilly Gardens
   final List<Tour> tours = [
     Tour(
-      name: 'City Highlights',
-      waypoints: [
-        Waypoint(name: 'Central Park', info: 'A beautiful park in the city center.', audioUrl: '', lat: 40.785091, lon: -73.968285),
-        Waypoint(name: 'Metropolitan Museum', info: 'Explore the city museum.', audioUrl: '', lat: 40.779437, lon: -73.963244),
-      ],
-    ),
-    // Manchester City Centre demo tour
-    Tour(
       name: 'Manchester City Centre',
+      imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/6/6b/Manchester_City_Centre_-_Panorama.jpg',
       waypoints: [
         Waypoint(name: 'Piccadilly Gardens', info: 'Start at Piccadilly Gardens', audioUrl: '', lat: 53.4808, lon: -2.2360),
-        Waypoint(name: 'Emmeline Pankhurst Statue', info: 'St Peter\'s Square memorial', audioUrl: '', lat: 53.4798, lon: -2.2426),
+        Waypoint(name: 'Emmeline Pankhurst Statue', info: 'Emmeline Pankhurst memorial in St Peter\'s Square', audioUrl: '', lat: 53.4798, lon: -2.2426),
         Waypoint(name: 'Sinclair\'s Oyster Bar', info: 'Historic oyster bar near the markets', audioUrl: '', lat: 53.4809, lon: -2.2380),
-      ],
-    ),
-    Tour(
-      name: 'Historic Walk',
-      waypoints: [
-        Waypoint(name: 'Old Town Square', info: 'Historic heart of the city.', audioUrl: '', lat: 50.087465, lon: 14.421254),
-      ],
-    ),
-    Tour(
-      name: 'Riverside Stroll',
-      waypoints: [
-        Waypoint(name: 'River Jetty', info: 'Peaceful riverside views.', audioUrl: '', lat: 51.507351, lon: -0.127758),
-      ],
-    ),
-    // Demo tour with closely spaced waypoints for GPS-based demo
-    Tour(
-      name: 'Demo Waterfront Loop',
-      waypoints: [
-        Waypoint(name: 'Pier A', info: 'Start of the demo loop.', audioUrl: '', lat: 40.700292, lon: -74.012084),
-        Waypoint(name: 'Boardwalk', info: 'Scenic boardwalk.', audioUrl: '', lat: 40.701800, lon: -74.010200),
-        Waypoint(name: 'Lookout', info: 'Nice lookout point.', audioUrl: '', lat: 40.703200, lon: -74.009000),
       ],
     ),
   ];
@@ -78,18 +51,22 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
           return Stack(
             fit: StackFit.expand,
             children: [
-              // Background placeholder
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.grey.shade900, Colors.black],
-                  ),
-                ),
-                child: Center(
-                  child: Icon(Icons.location_on, size: 120, color: Colors.white24),
-                ),
+              // Background image (if provided) or placeholder gradient
+              Positioned.fill(
+                child: (tour.imageUrl != null && tour.imageUrl!.isNotEmpty)
+                    ? Image.network(tour.imageUrl!, fit: BoxFit.cover)
+                    : Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.grey.shade900, Colors.black],
+                          ),
+                        ),
+                        child: Center(
+                          child: Icon(Icons.location_on, size: 120, color: Colors.white24),
+                        ),
+                      ),
               ),
 
               // Bottom left info
@@ -285,8 +262,9 @@ class WaypointDetailScreen extends StatelessWidget {
 
 class Tour {
   final String name;
+  final String? imageUrl;
   final List<Waypoint> waypoints;
-  Tour({required this.name, required this.waypoints});
+  Tour({required this.name, required this.waypoints, this.imageUrl});
 }
 
 class Waypoint {

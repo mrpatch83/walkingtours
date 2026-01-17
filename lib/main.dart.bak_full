@@ -6,7 +6,6 @@ import 'package:latlong2/latlong.dart' as ll;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
-import 'package:flutter/services.dart';
 
 
 void main() => runApp(WalkingTourApp());
@@ -29,6 +28,7 @@ class TikTokFeedScreen extends StatefulWidget {
 }
 
 class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
+  // Single Manchester tour with multiple waypoints starting at Piccadilly Gardens
   final List<Tour> tours = [
     Tour(
       name: 'Manchester City Centre',
@@ -44,16 +44,86 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Tours')),
-      body: ListView.builder(
+      backgroundColor: Colors.black,
+      body: PageView.builder(
+        scrollDirection: Axis.vertical,
         itemCount: tours.length,
         itemBuilder: (context, index) {
           final tour = tours[index];
-          return ListTile(
-            leading: tour.imageUrl != null ? SvgPicture.asset(tour.imageUrl!, width: 56, height: 56) : null,
-            title: Text(tour.name),
-            subtitle: Text(tour.waypoints.map((w) => w.name).join(' • ')),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WaypointListScreen(tour: tour))),
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // Background image (if provided) or placeholder gradient
+              Positioned.fill(
+                child: (tour.imageUrl != null && tour.imageUrl!.isNotEmpty)
+                    ? (tour.imageUrl!.startsWith('assets/') && tour.imageUrl!.endsWith('.svg')
+                        ? SvgPicture.asset(tour.imageUrl!, fit: BoxFit.cover)
+                        : (tour.imageUrl!.startsWith('assets/')
+                            ? Image.asset(tour.imageUrl!, fit: BoxFit.cover)
+                            : Image.network(tour.imageUrl!, fit: BoxFit.cover)))
+                    : Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.grey.shade900, Colors.black],
+                          ),
+                        ),
+                        child: Center(
+                          child: Icon(Icons.location_on, size: 120, color: Colors.white24),
+                        ),
+                      ),
+              ),
+
+              // Bottom left info
+              Positioned(
+                left: 16,
+                bottom: 60,
+                right: 96,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(tour.name, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                    SizedBox(height: 8),
+                    Text(tour.waypoints.map((w) => w.name).join(' • '), style: TextStyle(color: Colors.white70)),
+                  ],
+                ),
+              ),
+
+              // Right-side action buttons
+              Positioned(
+                right: 12,
+                bottom: 120,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ActionButton(icon: Icons.favorite, label: '1.2k'),
+                    SizedBox(height: 16),
+                    _ActionButton(icon: Icons.comment, label: '24'),
+                    SizedBox(height: 16),
+                    _ActionButton(icon: Icons.share, label: ''),
+                    SizedBox(height: 16),
+                    _ActionButton(icon: Icons.bookmark, label: ''),
+                  ],
+                ),
+              ),
+
+              // Tap area to open details
+              Positioned.fill(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => WaypointListScreen(tour: tour)),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -158,18 +228,16 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
   final MapController _mapController = MapController();
   int _currentIndex = 0;
   bool _navigating = false;
+  // ValueNotifier has no direct stream subscription; keep a dummy to cancel if needed
   VoidCallback? _listener;
-
-  // per-leg route and maneuvers persisted for the active leg
-  List<ll.LatLng> _legRoute = [];
-  List<Maneuver> _legManeuvers = [];
-  static const MethodChannel _audioChannel = MethodChannel('com.example.walking_tour_app/audio');
 
   @override
   void initState() {
     super.initState();
+    // start device GPS
     LocationService.instance.start();
-    _listener = () { _onPositionChanged(); };
+    // listen for position changes to update map and advance when close
+    _listener = () { setState(() {}); };
     LocationService.instance.position.addListener(_listener!);
   }
 
@@ -181,10 +249,7 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
   }
 
   void _start() {
-    setState(() {
-      _navigating = true;
-    });
-    _computeLegRouteAndManeuvers();
+    setState(() { _navigating = true; });
   }
 
   void _stop() {
@@ -193,121 +258,7 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
 
   void _skip() {
     if (_currentIndex < widget.tour.waypoints.length - 1) {
-      setState(() {
-        _currentIndex++;
-        _computeLegRouteAndManeuvers();
-      });
-    }
-  }
-
-  Future<void> _arrived() async {
-    final waypoint = widget.tour.waypoints[_currentIndex];
-    final url = waypoint.audioUrl;
-    // Try platform audio playback (iOS AVPlayer). If it fails or no url, just advance.
-    try {
-      if (url.isNotEmpty) {
-        await _audioChannel.invokeMethod('play', {'url': url});
-      }
-    } catch (e) {
-      // ignore playback errors
-    }
-
-    // Advance to next waypoint (or finish)
-    if (_currentIndex < widget.tour.waypoints.length - 1) {
-      setState(() {
-        _currentIndex++;
-        _legRoute = [];
-        _legManeuvers = [];
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) => _computeLegRouteAndManeuvers());
-    } else {
-      setState(() { _navigating = false; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Tour complete')));
-    }
-  }
-
-  static const MethodChannel _routingChannel = MethodChannel('com.example.walking_tour_app/routing');
-
-  Future<void> _computeLegRouteAndManeuvers() async {
-    final target = widget.tour.waypoints[_currentIndex];
-    final pos = LocationService.instance.position.value;
-    final start = (pos != Offset.zero) ? ll.LatLng(pos.dx, pos.dy) : ll.LatLng(target.lat, target.lon);
-    final end = ll.LatLng(target.lat, target.lon);
-
-    // Try to request a routed polyline from iOS MapKit (Apple Maps). Fallback to straight line if unavailable.
-    List<ll.LatLng> routePoints = [];
-    try {
-      final resp = await _routingChannel.invokeMethod('getRoute', {
-        'startLat': start.latitude,
-        'startLon': start.longitude,
-        'endLat': end.latitude,
-        'endLon': end.longitude,
-      });
-      if (resp is List) {
-        for (var item in resp) {
-          if (item is List && item.length >= 2) {
-            final lat = (item[0] as num).toDouble();
-            final lon = (item[1] as num).toDouble();
-            routePoints.add(ll.LatLng(lat, lon));
-          }
-        }
-      }
-    } catch (e) {
-      routePoints = [];
-    }
-
-    if (routePoints.isEmpty) {
-      // fallback straight-line interpolation
-      final steps = 60;
-      routePoints = List.generate(steps + 1, (i) {
-        final t = i / steps;
-        final lat = start.latitude + (end.latitude - start.latitude) * t;
-        final lon = start.longitude + (end.longitude - start.longitude) * t;
-        return ll.LatLng(lat, lon);
-      });
-    }
-
-    _legRoute = routePoints;
-    _legManeuvers = computeManeuvers(_legRoute);
-    setState(() {});
-  }
-
-  void _onPositionChanged() {
-    final pos = LocationService.instance.position.value;
-    if (pos == Offset.zero) return;
-    final current = ll.LatLng(pos.dx, pos.dy);
-    // ensure we have maneuvers for the active leg while navigating
-    if (_navigating && _legManeuvers.isEmpty) {
-      _computeLegRouteAndManeuvers();
-    }
-    // update maneuvers passed
-    _updateLegManeuver(current);
-    // check arrival
-    final target = widget.tour.waypoints[_currentIndex];
-    final meters = distanceMeters(current.latitude, current.longitude, target.lat, target.lon);
-    if (_navigating && meters <= 15.0) {
-      if (_currentIndex < widget.tour.waypoints.length - 1) {
-        setState(() {
-          _currentIndex++;
-          _legRoute = [];
-          _legManeuvers = [];
-        });
-        // compute next leg after small delay to allow UI to update
-        WidgetsBinding.instance.addPostFrameCallback((_) => _computeLegRouteAndManeuvers());
-      } else {
-        setState(() { _navigating = false; });
-      }
-    }
-    setState(() {});
-  }
-
-  void _updateLegManeuver(ll.LatLng p) {
-    for (var m in _legManeuvers) {
-      if (!m.passed) {
-        final d = distanceMeters(p.latitude, p.longitude, m.point.latitude, m.point.longitude);
-        if (d <= 8.0) m.passed = true;
-        else break;
-      }
+      setState(() { _currentIndex++; });
     }
   }
 
@@ -324,29 +275,44 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
               builder: (context, pos, _) {
                 final hasPos = pos != Offset.zero;
                 final current = hasPos ? ll.LatLng(pos.dx, pos.dy) : ll.LatLng(target.lat, target.lon);
+                final targetLatLng = ll.LatLng(target.lat, target.lon);
+                // move map to current
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   try { _mapController.move(current, 16.0); } catch (_) {}
                 });
-
-                final targetLatLng = ll.LatLng(target.lat, target.lon);
-                final polyPoints = _legRoute.isNotEmpty ? _legRoute : (() {
-                  final start = current;
-                  final end = targetLatLng;
-                  final steps = 60;
-                  return List.generate(steps + 1, (i) {
-                    final t = i / steps;
-                    final lat = start.latitude + (end.latitude - start.latitude) * t;
-                    final lon = start.longitude + (end.longitude - start.longitude) * t;
-                    return ll.LatLng(lat, lon);
-                  });
-                })();
-
+                final meters = hasPos ? distanceMeters(pos.dx, pos.dy, target.lat, target.lon) : null;
+                // auto-advance if within 15 meters
+                if (_navigating && meters != null && meters <= 15.0) {
+                  if (_currentIndex < widget.tour.waypoints.length - 1) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      setState(() { _currentIndex++; });
+                    });
+                  } else {
+                    // finished tour
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      setState(() { _navigating = false; });
+                    });
+                  }
+                }
                 return FlutterMap(
                   mapController: _mapController,
-                  options: MapOptions(center: current, zoom: 18.0),
+                  options: MapOptions(center: current, zoom: 16.0),
                   children: [
                     TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', subdomains: ['a','b','c']),
-                    PolylineLayer(polylines: [Polyline(points: polyPoints, color: Colors.blue, strokeWidth: 4.0)]),
+                    // build a simple interpolated route between current and target
+                    PolylineLayer(polylines: [
+                      Polyline(points: (() {
+                        final start = current;
+                        final end = targetLatLng;
+                        final steps = 60;
+                        return List.generate(steps + 1, (i) {
+                          final t = i / steps;
+                          final lat = start.latitude + (end.latitude - start.latitude) * t;
+                          final lon = start.longitude + (end.longitude - start.longitude) * t;
+                          return ll.LatLng(lat, lon);
+                        });
+                      })(), color: Colors.blue, strokeWidth: 4.0)
+                    ]),
                     MarkerLayer(markers: [
                       Marker(point: targetLatLng, width: 40, height: 40, child: Icon(Icons.flag, color: Colors.red, size: 36)),
                       if (hasPos) Marker(point: current, width: 40, height: 40, child: Icon(Icons.person_pin_circle, color: Colors.green, size: 36)),
@@ -355,65 +321,73 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
                 );
               },
             ),
-          ),
-
-          // persistent maneuver bar for the active leg
-          Builder(builder: (context) {
-            final pos = LocationService.instance.position.value;
-            if (!_navigating || pos == Offset.zero || _legManeuvers.isEmpty) return SizedBox.shrink();
-            final next = _legManeuvers.firstWhere((m) => !m.passed, orElse: () => _legManeuvers.last);
-            final d = distanceMeters(pos.dx, pos.dy, next.point.latitude, next.point.longitude);
-            return Container(
-              color: Colors.black87,
-              padding: EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Icon(Icons.navigation, color: Colors.white),
-                  SizedBox(width: 12),
-                  Expanded(child: Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16))),
-                  SizedBox(width: 12),
-                  Text('${d.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
-                ],
-              ),
-            );
-          }),
-
-          SafeArea(
-            bottom: true,
-            child: Material(
-              color: Colors.black87,
-              child: Padding(
+          // simple maneuver bar under the map when navigating
+          ValueListenableBuilder<Offset>(
+            valueListenable: LocationService.instance.position,
+            builder: (context, pos, _) {
+              if (!_navigating || pos == Offset.zero) return SizedBox.shrink();
+              final start = ll.LatLng(pos.dx, pos.dy);
+              final end = ll.LatLng(target.lat, target.lon);
+              final steps = 60;
+              final route = List.generate(steps + 1, (i) {
+                final t = i / steps;
+                final lat = start.latitude + (end.latitude - start.latitude) * t;
+                final lon = start.longitude + (end.longitude - start.longitude) * t;
+                return ll.LatLng(lat, lon);
+              });
+              final man = computeManeuvers(route);
+              final next = man.firstWhere((m) => !m.passed, orElse: () => man.last);
+              final d = distanceMeters(pos.dx, pos.dy, next.point.latitude, next.point.longitude);
+              return Container(
+                color: Colors.black87,
                 padding: EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Text('Next: ${target.name}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    SizedBox(height: 6),
-                    ValueListenableBuilder<Offset>(
-                      valueListenable: LocationService.instance.position,
-                      builder: (context, pos, _) {
-                        if (pos == Offset.zero) return Text('Waiting for device location...', style: TextStyle(color: Colors.white70));
-                        final m = distanceMeters(pos.dx, pos.dy, target.lat, target.lon);
-                        return Text('Distance: ${m.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70));
-                      },
-                    ),
-                    SizedBox(height: 8),
-                    Row(
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: _navigating ? _stop : _start,
-                          icon: Icon(_navigating ? Icons.pause : Icons.play_arrow),
-                          label: Text(_navigating ? 'Pause' : 'Start'),
-                        ),
-                        SizedBox(width: 12),
-                        ElevatedButton.icon(onPressed: _skip, icon: Icon(Icons.skip_next), label: Text('Skip')),
-                        SizedBox(width: 12),
-                        ElevatedButton.icon(onPressed: _arrived, icon: Icon(Icons.check_circle), label: Text('Arrived')),
-                      ],
-                    ),
+                    Icon(Icons.navigation, color: Colors.white),
+                    SizedBox(width: 12),
+                    Expanded(child: Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16))),
+                    SizedBox(width: 12),
+                    Text('${d.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
                   ],
                 ),
-              ),
+              );
+            },
+          ),
+          Container(
+            padding: EdgeInsets.all(12),
+            color: Colors.black87,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Next: ${target.name}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(height: 6),
+                ValueListenableBuilder<Offset>(
+                  valueListenable: LocationService.instance.position,
+                  builder: (context, pos, _) {
+                    if (pos == Offset.zero) return Text('Waiting for device location...', style: TextStyle(color: Colors.white70));
+                    final m = distanceMeters(pos.dx, pos.dy, target.lat, target.lon);
+                    return Text('Distance: ${m.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70));
+                  },
+                ),
+                SizedBox(height: 8),
+                Row(
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _navigating ? _stop : _start,
+                      icon: Icon(_navigating ? Icons.pause : Icons.play_arrow),
+                      label: Text(_navigating ? 'Pause' : 'Start'),
+                    ),
+                    SizedBox(width: 12),
+                    ElevatedButton.icon(onPressed: _skip, icon: Icon(Icons.skip_next), label: Text('Skip')),
+                    SizedBox(width: 12),
+                    ElevatedButton.icon(onPressed: () {
+                      // simulate setting device to waypoint for testing
+                      LocationService.instance.setPosition(target.lat, target.lon);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Simulated arrival at ${target.name}')));
+                    }, icon: Icon(Icons.my_location), label: Text('Simulate')),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -557,7 +531,6 @@ double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
   return R * c;
 }
 
-// Simple maneuver model and helpers for turn-by-turn
 class Maneuver {
   final ll.LatLng point;
   final String instruction;
@@ -581,30 +554,17 @@ double _angleDiff(double a, double b) {
   return d;
 }
 
-String _bearingToCompass(double bearing) {
-  // 16-point compass
-  final List<String> points = [
-    'north', 'north-northeast', 'northeast', 'east-northeast',
-    'east', 'east-southeast', 'southeast', 'south-southeast',
-    'south', 'south-southwest', 'southwest', 'west-southwest',
-    'west', 'west-northwest', 'northwest', 'north-northwest'
-  ];
-  final idx = ((bearing + 11.25) % 360) / 22.5;
-  return points[idx.floor() % 16];
-}
-
 List<Maneuver> computeManeuvers(List<ll.LatLng> route) {
   final List<Maneuver> out = [];
   if (route.length < 2) return out;
-  // first instruction: head in initial bearing towards destination
-  final initialBearing = _bearingBetween(route[0].latitude, route[0].longitude, route[1].latitude, route[1].longitude);
-  final initialDir = _bearingToCompass(initialBearing);
-  out.add(Maneuver(point: route.last, instruction: 'Head $initialDir towards destination'));
+  // first instruction: head towards destination
+  out.add(Maneuver(point: route.last, instruction: 'Head towards destination'));
   // compute bearings for consecutive segments
   final bearings = List<double>.filled(route.length - 1, 0.0);
   for (var i = 0; i < route.length - 1; i++) {
     bearings[i] = _bearingBetween(route[i].latitude, route[i].longitude, route[i + 1].latitude, route[i + 1].longitude);
   }
+  // detect changes in bearing larger than threshold => a turn
   const threshold = 25.0; // degrees
   ll.LatLng? lastAddedPoint;
   for (var i = 0; i < bearings.length - 1; i++) {
@@ -612,17 +572,17 @@ List<Maneuver> computeManeuvers(List<ll.LatLng> route) {
     if (diff.abs() >= threshold) {
       final idx = i + 1;
       final point = route[idx];
+      // avoid adding many maneuvers near each other: skip if too close to last
       if (lastAddedPoint != null) {
         final d = distanceMeters(lastAddedPoint.latitude, lastAddedPoint.longitude, point.latitude, point.longitude);
         if (d < 12.0) continue;
       }
-      final afterBearing = bearings[i + 1];
-      final afterDir = _bearingToCompass(afterBearing);
       final turnDir = diff > 0 ? 'Turn right' : 'Turn left';
-      out.add(Maneuver(point: point, instruction: '$turnDir, head $afterDir'));
+      out.add(Maneuver(point: point, instruction: '$turnDir in ${distanceMeters(route[0].latitude, route[0].longitude, point.latitude, point.longitude).toStringAsFixed(0)} m'));
       lastAddedPoint = point;
     }
   }
+  // final arrival instruction
   out.add(Maneuver(point: route.last, instruction: 'You have arrived'));
   return out;
 }
@@ -663,10 +623,10 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
       return ll.LatLng(lat, lon);
     });
     // move map to start
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _mapController.move(start, 18.0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _mapController.move(start, 15.0);
     });
-    // compute simple maneuvers
+    // compute simple turn-by-turn maneuvers from the straight route
     _maneuvers = computeManeuvers(_route);
   }
 
@@ -684,8 +644,9 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
       final p = _route[_stepIndex];
       LocationService.instance.setPosition(p.latitude, p.longitude);
       try {
-          _mapController.move(p, 18.0);
+        _mapController.move(p, _mapController.zoom);
       } catch (_) {}
+      // update next maneuver index
       _updateNextManeuver(p);
       setState(() {});
       _stepIndex++;
@@ -722,22 +683,24 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
           ]),
         ],
       ),
+      bottomNavigationBar: _buildManeuverBar(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isNavigating ? _stopNavigation : _startNavigation,
         label: Text(_isNavigating ? 'Stop' : 'Start Navigation'),
         icon: Icon(_isNavigating ? Icons.stop : Icons.play_arrow),
       ),
-      bottomNavigationBar: _buildManeuverBar(),
     );
   }
 
   Widget _buildManeuverBar() {
     if (_maneuvers.isEmpty) return SizedBox.shrink();
-    final cur = LocationService.instance.position.value;
-    if (cur == Offset.zero) return SizedBox.shrink();
-    final curLatLng = ll.LatLng(cur.dx, cur.dy);
+    final currentPos = LocationService.instance.position.value;
+    final curLatLng = currentPos == Offset.zero ? null : ll.LatLng(currentPos.dx, currentPos.dy);
     final next = _maneuvers.firstWhere((m) => !m.passed, orElse: () => _maneuvers.last);
-    final d = distanceMeters(curLatLng.latitude, curLatLng.longitude, next.point.latitude, next.point.longitude);
+    double? dist;
+    if (curLatLng != null) {
+      dist = distanceMeters(curLatLng.latitude, curLatLng.longitude, next.point.latitude, next.point.longitude);
+    }
     return Container(
       color: Colors.black87,
       padding: EdgeInsets.all(12),
@@ -746,8 +709,8 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
           Icon(Icons.navigation, color: Colors.white),
           SizedBox(width: 12),
           Expanded(child: Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16))),
-          SizedBox(width: 12),
-          Text('${d.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
+          if (dist != null) SizedBox(width: 12),
+          if (dist != null) Text('${dist.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
         ],
       ),
     );
@@ -757,8 +720,11 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
     for (var m in _maneuvers) {
       if (!m.passed) {
         final d = distanceMeters(p.latitude, p.longitude, m.point.latitude, m.point.longitude);
-        if (d <= 8.0) m.passed = true;
-        else break;
+        if (d <= 8.0) {
+          m.passed = true;
+        } else {
+          break;
+        }
       }
     }
   }

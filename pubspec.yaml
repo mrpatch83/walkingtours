@@ -24,5 +24,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/manchester.svg
+    - assets/tours.json
     # add audio assets here if you include local audio files
     # - assets/audio/intro.mp3

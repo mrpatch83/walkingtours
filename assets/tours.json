@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Manchester City Centre",
+    "imageUrl": "assets/images/manchester.svg",
+    "waypoints": [
+      { "name": "Piccadilly Gardens", "info": "Start at Piccadilly Gardens", "audioUrl": "", "lat": 53.4808, "lon": -2.2360 },
+      { "name": "Emmeline Pankhurst Statue", "info": "Emmeline Pankhurst memorial in St Peter's Square", "audioUrl": "", "lat": 53.4798, "lon": -2.2426 },
+      { "name": "Sinclair's Oyster Bar", "info": "Historic oyster bar near the markets", "audioUrl": "", "lat": 53.4809, "lon": -2.2380 }
+    ]
+  }
+]

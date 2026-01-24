@@ -4,6 +4,13 @@ import 'dart:math' as math;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:flutter_svg/flutter_svg.dart';
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+// conditional import for web storage
+import 'web_storage_stub.dart' if (dart.library.html) 'web_storage.dart';
+// conditional web file picker
+import 'web_file_picker_stub.dart' if (dart.library.html) 'web_file_picker_web.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
@@ -29,7 +36,7 @@ class TikTokFeedScreen extends StatefulWidget {
 }
 
 class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
-  final List<Tour> tours = [
+  List<Tour> tours = [
     Tour(
       name: 'Manchester City Centre',
       imageUrl: 'assets/images/manchester.svg',
@@ -41,10 +48,60 @@ class _TikTokFeedScreenState extends State<TikTokFeedScreen> {
     ),
   ];
 
+  final _webStorage = WebStorage();
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb) {
+      final saved = _webStorage.loadTours();
+      if (saved != null) {
+        try {
+          final decoded = json.decode(saved) as List<dynamic>;
+          final loaded = decoded.map((e) => Tour.fromJson(e as Map<String, dynamic>)).toList();
+          // merge loaded tours with defaults: append any new tours that don't match by name
+          for (var lt in loaded) {
+            if (!tours.any((t) => t.name == lt.name)) tours.add(lt);
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Load tours from asset if present (allows bundling user-updated tours into the app)
+    try {
+      rootBundle.loadString('assets/tours.json').then((s) {
+        try {
+          final decoded = json.decode(s) as List<dynamic>;
+          final loaded = decoded.map((e) => Tour.fromJson(e as Map<String, dynamic>)).toList();
+          setState(() {
+            for (var lt in loaded) {
+              if (!tours.any((t) => t.name == lt.name)) tours.add(lt);
+            }
+          });
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Tours')),
+      appBar: AppBar(title: Text('Tours'), actions: [
+        if (kIsWeb)
+          TextButton.icon(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => TourEditorScreen(initialTours: tours, onSave: (list) {
+              setState(() {
+                // merge saved/edited list into existing tours by name
+                for (var nt in list) {
+                  if (!tours.any((t) => t.name == nt.name)) tours.add(nt);
+                }
+              });
+              _webStorage.saveTours(json.encode(tours.map((t) => t.toJson()).toList()));
+            }))),
+            icon: Icon(Icons.edit, color: Colors.white),
+            label: Text('Edit Tours', style: TextStyle(color: Colors.white)),
+          ),
+      ]),
       body: ListView.builder(
         itemCount: tours.length,
         itemBuilder: (context, index) {
@@ -305,7 +362,7 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
     for (var m in _legManeuvers) {
       if (!m.passed) {
         final d = distanceMeters(p.latitude, p.longitude, m.point.latitude, m.point.longitude);
-        if (d <= 8.0) m.passed = true;
+        if (d <= 12.0) m.passed = true;
         else break;
       }
     }
@@ -325,7 +382,7 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
                 final hasPos = pos != Offset.zero;
                 final current = hasPos ? ll.LatLng(pos.dx, pos.dy) : ll.LatLng(target.lat, target.lon);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  try { _mapController.move(current, 16.0); } catch (_) {}
+                  try { _mapController.move(current, 19.0); } catch (_) {}
                 });
 
                 final targetLatLng = ll.LatLng(target.lat, target.lon);
@@ -341,12 +398,29 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
                   });
                 })();
 
+                // split polyline into passed and remaining segments so user sees progress
+                final passedRemaining = (() {
+                  if (_legManeuvers.isEmpty) return <List<ll.LatLng>>[[], polyPoints];
+                  final next = _legManeuvers.firstWhere((m) => !m.passed, orElse: () => _legManeuvers.last);
+                  var splitIndex = polyPoints.length;
+                  for (var i = 0; i < polyPoints.length; i++) {
+                    final d = distanceMeters(polyPoints[i].latitude, polyPoints[i].longitude, next.point.latitude, next.point.longitude);
+                    if (d < 5.0) { splitIndex = i; break; }
+                  }
+                  final passed = (splitIndex > 0) ? polyPoints.sublist(0, splitIndex + 1) : <ll.LatLng>[];
+                  final remaining = (splitIndex < polyPoints.length) ? polyPoints.sublist(splitIndex) : <ll.LatLng>[];
+                  return <List<ll.LatLng>>[passed, remaining];
+                })();
+
                 return FlutterMap(
                   mapController: _mapController,
-                  options: MapOptions(center: current, zoom: 18.0),
+                  options: MapOptions(center: current, zoom: 19.0, maxZoom: 20.0, minZoom: 14.0),
                   children: [
                     TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', subdomains: ['a','b','c']),
-                    PolylineLayer(polylines: [Polyline(points: polyPoints, color: Colors.blue, strokeWidth: 4.0)]),
+                    PolylineLayer(polylines: [
+                      if (passedRemaining[0].isNotEmpty) Polyline(points: passedRemaining[0], color: Colors.grey.shade500, strokeWidth: 4.0),
+                      if (passedRemaining[1].isNotEmpty) Polyline(points: passedRemaining[1], color: Colors.blue, strokeWidth: 4.0),
+                    ]),
                     MarkerLayer(markers: [
                       Marker(point: targetLatLng, width: 40, height: 40, child: Icon(Icons.flag, color: Colors.red, size: 36)),
                       if (hasPos) Marker(point: current, width: 40, height: 40, child: Icon(Icons.person_pin_circle, color: Colors.green, size: 36)),
@@ -361,7 +435,9 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
           Builder(builder: (context) {
             final pos = LocationService.instance.position.value;
             if (!_navigating || pos == Offset.zero || _legManeuvers.isEmpty) return SizedBox.shrink();
-            final next = _legManeuvers.firstWhere((m) => !m.passed, orElse: () => _legManeuvers.last);
+            final nextIndex = _legManeuvers.indexWhere((m) => !m.passed);
+            final next = nextIndex >= 0 ? _legManeuvers[nextIndex] : _legManeuvers.last;
+            final second = (nextIndex >= 0 && nextIndex + 1 < _legManeuvers.length) ? _legManeuvers[nextIndex + 1] : null;
             final d = distanceMeters(pos.dx, pos.dy, next.point.latitude, next.point.longitude);
             return Container(
               color: Colors.black87,
@@ -370,7 +446,16 @@ class _TourNavigationScreenState extends State<TourNavigationScreen> {
                 children: [
                   Icon(Icons.navigation, color: Colors.white),
                   SizedBox(width: 12),
-                  Expanded(child: Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16))),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16)),
+                        if (second != null) SizedBox(height: 6),
+                        if (second != null) Text('Then: ${second.instruction}', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ),
+                  ),
                   SizedBox(width: 12),
                   Text('${d.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
                 ],
@@ -483,20 +568,183 @@ class WaypointDetailScreen extends StatelessWidget {
   }
 }
 
+// Simple web tour editor screen (web-only features enabled via WebStorage)
+class TourEditorScreen extends StatefulWidget {
+  final void Function(List<Tour>)? onSave;
+  final List<Tour>? initialTours;
+  TourEditorScreen({this.onSave, this.initialTours});
+  @override
+  _TourEditorScreenState createState() => _TourEditorScreenState();
+}
+
+class _TourEditorScreenState extends State<TourEditorScreen> {
+  List<Tour> _tours = [];
+  final _webStorage = WebStorage();
+
+  @override
+  void initState() {
+    super.initState();
+    // start with initial tours passed from app (defaults), make a deep copy
+    if (widget.initialTours != null) {
+      _tours = widget.initialTours!.map((t) => Tour(name: t.name, imageUrl: t.imageUrl, waypoints: t.waypoints.map((w) => Waypoint(name: w.name, info: w.info, audioUrl: w.audioUrl, lat: w.lat, lon: w.lon)).toList())).toList();
+    }
+    // then load any saved tours from web storage and append any new ones
+    final saved = _webStorage.loadTours();
+    if (saved != null) {
+      try {
+        final decoded = json.decode(saved) as List<dynamic>;
+        final loaded = decoded.map((e) => Tour.fromJson(e as Map<String, dynamic>)).toList();
+        for (var lt in loaded) {
+          if (!_tours.any((t) => t.name == lt.name)) _tours.add(lt);
+        }
+      } catch (_) {}
+    }
+  }
+
+  void _addTour() {
+    setState(() { _tours.add(Tour(name: 'New Tour', imageUrl: null, waypoints: [])); });
+  }
+
+  void _saveAll() {
+    final jsonStr = json.encode(_tours.map((t) => t.toJson()).toList());
+    _webStorage.saveTours(jsonStr);
+    _webStorage.downloadTours(jsonStr, 'tours.json');
+    if (widget.onSave != null) widget.onSave!(_tours);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Tours saved')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Tour Editor'), actions: [
+        IconButton(onPressed: _addTour, icon: Icon(Icons.add), tooltip: 'Add Tour'),
+      ]),
+      body: ListView.builder(
+        itemCount: _tours.length,
+        itemBuilder: (context, idx) {
+          final tour = _tours[idx];
+          return Card(
+            margin: EdgeInsets.all(8),
+            child: Padding(
+              padding: EdgeInsets.all(8),
+              child: Column(
+                children: [
+                  TextFormField(initialValue: tour.name, onChanged: (v) => tour.name == v ? null : tour.name = v),
+                  SizedBox(height: 8),
+                  TextFormField(
+                    initialValue: tour.imageUrl ?? '',
+                    decoration: InputDecoration(labelText: 'Image URL or asset path (optional)'),
+                    onChanged: (v) => tour.imageUrl = v.trim().isEmpty ? null : v.trim(),
+                  ),
+                  SizedBox(height: 8),
+                  if (tour.imageUrl != null && tour.imageUrl!.isNotEmpty)
+                    Builder(builder: (c) {
+                      final url = tour.imageUrl!;
+                      if (url.startsWith('http')) {
+                        if (url.toLowerCase().endsWith('.svg')) return SvgPicture.network(url, height: 80);
+                        return Image.network(url, height: 80, errorBuilder: (_, __, ___) => Text('Preview not available'));
+                      } else {
+                        try {
+                          return SvgPicture.asset(url, height: 80);
+                        } catch (_) {
+                          return Text('Preview not available for asset path');
+                        }
+                      }
+                    }),
+                  SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      if (!kIsWeb) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image upload is available on web only')));
+                        return;
+                      }
+                      final dataUrl = await pickImageFile();
+                      if (dataUrl != null) setState(() { tour.imageUrl = dataUrl; });
+                    },
+                    icon: Icon(Icons.upload_file),
+                    label: Text('Upload Image (web)'),
+                  ),
+                  SizedBox(height: 8),
+                  ...tour.waypoints.asMap().entries.map((e) {
+                    final i = e.key; final w = e.value;
+                    return ListTile(
+                      title: TextFormField(initialValue: w.name, onChanged: (v) => w.name == v ? null : w.name = v),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TextFormField(initialValue: w.info, onChanged: (v) => w.info == v ? null : w.info = v),
+                          Row(children: [
+                            Expanded(child: TextFormField(initialValue: w.lat.toString(), onChanged: (v) { final d = double.tryParse(v) ?? w.lat; w.lat = d; })),
+                            SizedBox(width: 8),
+                            Expanded(child: TextFormField(initialValue: w.lon.toString(), onChanged: (v) { final d = double.tryParse(v) ?? w.lon; w.lon = d; })),
+                          ]),
+                          TextButton(onPressed: () { setState(() { tour.waypoints.removeAt(i); }); }, child: Text('Remove waypoint'))
+                        ],
+                      ),
+                    );
+                  }),
+                  TextButton(onPressed: () { setState(() { tour.waypoints.add(Waypoint(name: 'WP', info: '', audioUrl: '', lat: 0.0, lon: 0.0)); }); }, child: Text('Add waypoint')),
+                  SizedBox(height: 6),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(onPressed: _addTour, icon: Icon(Icons.add), label: Text('Add Tour')),
+          SizedBox(height: 8),
+          FloatingActionButton.extended(onPressed: _saveAll, icon: Icon(Icons.save), label: Text('Save & Export')),
+        ],
+      ),
+    );
+  }
+}
+
 class Tour {
-  final String name;
-  final String? imageUrl;
+  String name;
+  String? imageUrl;
   final List<Waypoint> waypoints;
   Tour({required this.name, required this.waypoints, this.imageUrl});
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'imageUrl': imageUrl,
+        'waypoints': waypoints.map((w) => w.toJson()).toList(),
+      };
+
+  static Tour fromJson(Map<String, dynamic> j) => Tour(
+        name: j['name'] ?? 'Untitled',
+        imageUrl: j['imageUrl'],
+        waypoints: (j['waypoints'] as List<dynamic>? ?? []).map((e) => Waypoint.fromJson(e as Map<String, dynamic>)).toList(),
+      );
 }
 
 class Waypoint {
-  final String name;
-  final String info;
-  final String audioUrl;
-  final double lat;
-  final double lon;
+  String name;
+  String info;
+  String audioUrl;
+  double lat;
+  double lon;
   Waypoint({required this.name, required this.info, required this.audioUrl, required this.lat, required this.lon});
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'info': info,
+        'audioUrl': audioUrl,
+        'lat': lat,
+        'lon': lon,
+      };
+
+  static Waypoint fromJson(Map<String, dynamic> j) => Waypoint(
+        name: j['name'] ?? '',
+        info: j['info'] ?? '',
+        audioUrl: j['audioUrl'] ?? '',
+        lat: (j['lat'] as num?)?.toDouble() ?? 0.0,
+        lon: (j['lon'] as num?)?.toDouble() ?? 0.0,
+      );
 }
 
 // Location service: uses device GPS when permission granted, otherwise supports manual simulation
@@ -605,7 +853,7 @@ List<Maneuver> computeManeuvers(List<ll.LatLng> route) {
   for (var i = 0; i < route.length - 1; i++) {
     bearings[i] = _bearingBetween(route[i].latitude, route[i].longitude, route[i + 1].latitude, route[i + 1].longitude);
   }
-  const threshold = 25.0; // degrees
+  const threshold = 15.0; // degrees (more sensitive to gentler turns)
   ll.LatLng? lastAddedPoint;
   for (var i = 0; i < bearings.length - 1; i++) {
     final diff = _angleDiff(bearings[i], bearings[i + 1]);
@@ -662,9 +910,9 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
       final lon = start.longitude + (end.longitude - start.longitude) * t;
       return ll.LatLng(lat, lon);
     });
-    // move map to start
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _mapController.move(start, 18.0);
+    // move map to start (zoomed-in for walking)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _mapController.move(start, 19.0);
     });
     // compute simple maneuvers
     _maneuvers = computeManeuvers(_route);
@@ -683,13 +931,23 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
       }
       final p = _route[_stepIndex];
       LocationService.instance.setPosition(p.latitude, p.longitude);
-      try {
-          _mapController.move(p, 18.0);
-      } catch (_) {}
+        try {
+          _mapController.move(p, 19.0);
+        } catch (_) {}
       _updateNextManeuver(p);
       setState(() {});
       _stepIndex++;
     });
+  }
+
+  void _updateNextManeuver(ll.LatLng p) {
+    for (var m in _maneuvers) {
+      if (!m.passed) {
+        final d = distanceMeters(p.latitude, p.longitude, m.point.latitude, m.point.longitude);
+        if (d <= 12.0) m.passed = true;
+        else break;
+      }
+    }
   }
 
   void _stopNavigation() {
@@ -712,10 +970,14 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
       appBar: AppBar(title: Text('In-App Navigation')),
       body: FlutterMap(
         mapController: _mapController,
-        options: MapOptions(center: start, zoom: 15.0),
+        options: MapOptions(center: start, zoom: 19.0, maxZoom: 20.0, minZoom: 14.0),
         children: [
           TileLayer(urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', subdomains: ['a','b','c']),
-          PolylineLayer(polylines: [Polyline(points: _route, color: Colors.blue, strokeWidth: 4.0)]),
+          // split route into passed and remaining based on _stepIndex
+          PolylineLayer(polylines: [
+            if (_stepIndex > 0) Polyline(points: _route.sublist(0, math.min(_stepIndex, _route.length)), color: Colors.grey.shade500, strokeWidth: 4.0),
+            if (_stepIndex < _route.length) Polyline(points: _route.sublist(math.min(_stepIndex, _route.length)), color: Colors.blue, strokeWidth: 4.0),
+          ]),
           MarkerLayer(markers: [
             Marker(point: start, width: 40, height: 40, child: Icon(Icons.person_pin_circle, color: Colors.green, size: 36)),
             Marker(point: end, width: 40, height: 40, child: Icon(Icons.flag, color: Colors.red, size: 36)),
@@ -736,7 +998,9 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
     final cur = LocationService.instance.position.value;
     if (cur == Offset.zero) return SizedBox.shrink();
     final curLatLng = ll.LatLng(cur.dx, cur.dy);
-    final next = _maneuvers.firstWhere((m) => !m.passed, orElse: () => _maneuvers.last);
+    final nextIndex = _maneuvers.indexWhere((m) => !m.passed);
+    final next = nextIndex >= 0 ? _maneuvers[nextIndex] : _maneuvers.last;
+    final second = (nextIndex >= 0 && nextIndex + 1 < _maneuvers.length) ? _maneuvers[nextIndex + 1] : null;
     final d = distanceMeters(curLatLng.latitude, curLatLng.longitude, next.point.latitude, next.point.longitude);
     return Container(
       color: Colors.black87,
@@ -745,7 +1009,16 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
         children: [
           Icon(Icons.navigation, color: Colors.white),
           SizedBox(width: 12),
-          Expanded(child: Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16))),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(next.instruction, style: TextStyle(color: Colors.white, fontSize: 16)),
+                if (second != null) SizedBox(height: 6),
+                if (second != null) Text('Then: ${second.instruction}', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ],
+            ),
+          ),
           SizedBox(width: 12),
           Text('${d.toStringAsFixed(0)} m', style: TextStyle(color: Colors.white70)),
         ],
@@ -753,14 +1026,5 @@ class _MapNavigationScreenState extends State<MapNavigationScreen> {
     );
   }
 
-  void _updateNextManeuver(ll.LatLng p) {
-    for (var m in _maneuvers) {
-      if (!m.passed) {
-        final d = distanceMeters(p.latitude, p.longitude, m.point.latitude, m.point.longitude);
-        if (d <= 8.0) m.passed = true;
-        else break;
-      }
-    }
-  }
 }
 
